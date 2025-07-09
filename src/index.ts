@@ -51,7 +51,7 @@ export const blogModule: ModuleInterface = {
 
   async install(context) {
     // Run database migrations for blog tables
-    console.log('Installing blog module...')
+    // Installing blog module
     
     // Add blog-specific settings
     await context.prisma.setting.createMany({
@@ -64,11 +64,11 @@ export const blogModule: ModuleInterface = {
       skipDuplicates: true
     })
     
-    console.log('Blog module installed successfully')
+    // Blog module installed successfully
   },
 
   async activate(context) {
-    console.log('Activating blog module...')
+    // Activating blog module
     
     // Register blog routes
     context.events.emit('module:routes:register', {
@@ -82,17 +82,17 @@ export const blogModule: ModuleInterface = {
       pages: Object.keys(this.exports.pages || {})
     })
     
-    console.log('Blog module activated successfully')
+    // Blog module activated successfully
   },
 
   async deactivate(context) {
-    console.log('Deactivating blog module...')
+    // Deactivating blog module
     
     // Unregister routes and pages
     context.events.emit('module:routes:unregister', { module: 'blog' })
     context.events.emit('module:pages:unregister', { module: 'blog' })
     
-    console.log('Blog module deactivated successfully')
+    // Blog module deactivated successfully
   },
 
   getDefaultConfig() {
