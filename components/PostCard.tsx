@@ -85,17 +85,17 @@ const PostCard: React.FC<PostCardProps> = ({
                 {post.author.image && (
                   <Image
                     src={post.author.image}
-                    alt={post.author.name || post.author.email}
+                    alt={post.author.name || post.author.displayName || 'Author'}
                     width={20}
                     height={20}
                     className="rounded-full"
                   />
                 )}
                 <Link
-                  href={`/blog/author/${post.author.email}`}
+                  href={`/blog/author/${post.author.id}`}
                   className="hover:text-primary-600 transition-colors"
                 >
-                  {post.author.displayName || post.author.name || post.author.email}
+                  {post.author.displayName || post.author.name || 'Anonymous'}
                 </Link>
               </div>
             )}

@@ -4,9 +4,23 @@ import { prisma } from '@freedompress/core'
 import { createApiHandler, successResponse, errorResponse } from '@freedompress/core'
 import { PostCreateInput, PostUpdateInput, PostQuery, BlogApiResponse, PaginatedResponse, Post } from '../src/types'
 import { generateSlug, generateExcerpt, validatePostData } from '../src/utils'
+import { withSecurity } from '../src/middleware/security'
 
 // GET /api/blog/posts - Get all posts with pagination and filtering
 async function getPosts(req: NextApiRequest, res: NextApiResponse) {
+  // Apply security middleware
+  const securityPassed = await withSecurity(req, res, {
+    rateLimit: { maxRequests: 100 },
+    csrf: false, // GET requests don't need CSRF protection
+    sanitizeInput: true,
+    validateIP: true,
+    setHeaders: true
+  })
+  
+  if (!securityPassed) {
+    return // Security middleware already sent the response
+  }
+
   try {
     const {
       page = 1,
@@ -21,8 +35,9 @@ async function getPosts(req: NextApiRequest, res: NextApiResponse) {
       sortOrder = 'desc'
     } = req.query as PostQuery
 
-    const pageNum = parseInt(page as string)
-    const limitNum = parseInt(limit as string)
+    // Validate and sanitize pagination parameters
+    const pageNum = Math.max(1, parseInt(page as string) || 1)
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string) || 10))
     const skip = (pageNum - 1) * limitNum
 
     // Build where clause
@@ -66,13 +81,19 @@ async function getPosts(req: NextApiRequest, res: NextApiResponse) {
     
     if (author) {
       where.author = {
-        email: author as string
+        id: author as string
       }
     }
 
-    // Build order clause
+    // Build order clause with SQL injection protection
+    const allowedSortFields = ['publishedAt', 'createdAt', 'updatedAt', 'title', 'views', 'likes']
+    const allowedSortOrders = ['asc', 'desc']
+    
+    const safeSortBy = allowedSortFields.includes(sortBy as string) ? sortBy as string : 'publishedAt'
+    const safeSortOrder = allowedSortOrders.includes(sortOrder as string) ? sortOrder as string : 'desc'
+    
     const orderBy: any = {}
-    orderBy[sortBy as string] = sortOrder
+    orderBy[safeSortBy] = safeSortOrder
 
     // Get posts with relations
     const [posts, total] = await Promise.all([
@@ -83,7 +104,6 @@ async function getPosts(req: NextApiRequest, res: NextApiResponse) {
             select: {
               id: true,
               name: true,
-              email: true,
               image: true,
               displayName: true
             }
@@ -144,13 +164,31 @@ async function getPosts(req: NextApiRequest, res: NextApiResponse) {
 
     return successResponse(res, response.data)
   } catch (error) {
-    console.error('Error fetching posts:', error)
+    // Log error securely without exposing sensitive data
+    console.error('Error fetching posts:', {
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : 'Unknown error',
+      stack: process.env.NODE_ENV === 'development' ? (error as Error).stack : undefined
+    })
     return errorResponse(res, 'Failed to fetch posts', 500)
   }
 }
 
 // POST /api/blog/posts - Create a new post
 async function createPost(req: NextApiRequest, res: NextApiResponse) {
+  // Apply security middleware with CSRF protection
+  const securityPassed = await withSecurity(req, res, {
+    rateLimit: { maxRequests: 20 }, // Stricter rate limit for POST requests
+    csrf: true, // POST requests need CSRF protection
+    sanitizeInput: true,
+    validateIP: true,
+    setHeaders: true
+  })
+  
+  if (!securityPassed) {
+    return // Security middleware already sent the response
+  }
+
   try {
     const session = await getSession({ req })
     if (!session?.user) {
@@ -212,7 +250,6 @@ async function createPost(req: NextApiRequest, res: NextApiResponse) {
           select: {
             id: true,
             name: true,
-            email: true,
             image: true,
             displayName: true
           }
@@ -238,13 +275,31 @@ async function createPost(req: NextApiRequest, res: NextApiResponse) {
 
     return successResponse(res, response.data, 201)
   } catch (error) {
-    console.error('Error creating post:', error)
+    // Log error securely without exposing sensitive data
+    console.error('Error creating post:', {
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : 'Unknown error',
+      stack: process.env.NODE_ENV === 'development' ? (error as Error).stack : undefined
+    })
     return errorResponse(res, 'Failed to create post', 500)
   }
 }
 
 // PUT /api/blog/posts/[id] - Update a post
 async function updatePost(req: NextApiRequest, res: NextApiResponse) {
+  // Apply security middleware with CSRF protection
+  const securityPassed = await withSecurity(req, res, {
+    rateLimit: { maxRequests: 20 }, // Stricter rate limit for PUT requests
+    csrf: true, // PUT requests need CSRF protection
+    sanitizeInput: true,
+    validateIP: true,
+    setHeaders: true
+  })
+  
+  if (!securityPassed) {
+    return // Security middleware already sent the response
+  }
+
   try {
     const session = await getSession({ req })
     if (!session?.user) {
@@ -265,7 +320,17 @@ async function updatePost(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Check permission - only author or admin can update
-    if (existingPost.authorId !== session.user.id && session.user.role !== 'admin') {
+    // Get user from database to verify role (don't trust client session)
+    const user = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { id: true, role: true }
+    })
+
+    if (!user) {
+      return errorResponse(res, 'Unauthorized', 401)
+    }
+
+    if (existingPost.authorId !== user.id && user.role !== 'admin') {
       return errorResponse(res, 'Forbidden', 403)
     }
 
@@ -330,7 +395,6 @@ async function updatePost(req: NextApiRequest, res: NextApiResponse) {
           select: {
             id: true,
             name: true,
-            email: true,
             image: true,
             displayName: true
           }
@@ -356,13 +420,31 @@ async function updatePost(req: NextApiRequest, res: NextApiResponse) {
 
     return successResponse(res, response.data)
   } catch (error) {
-    console.error('Error updating post:', error)
+    // Log error securely without exposing sensitive data
+    console.error('Error updating post:', {
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : 'Unknown error',
+      stack: process.env.NODE_ENV === 'development' ? (error as Error).stack : undefined
+    })
     return errorResponse(res, 'Failed to update post', 500)
   }
 }
 
 // DELETE /api/blog/posts/[id] - Delete a post
 async function deletePost(req: NextApiRequest, res: NextApiResponse) {
+  // Apply security middleware with CSRF protection
+  const securityPassed = await withSecurity(req, res, {
+    rateLimit: { maxRequests: 10 }, // Very strict rate limit for DELETE requests
+    csrf: true, // DELETE requests need CSRF protection
+    sanitizeInput: true,
+    validateIP: true,
+    setHeaders: true
+  })
+  
+  if (!securityPassed) {
+    return // Security middleware already sent the response
+  }
+
   try {
     const session = await getSession({ req })
     if (!session?.user) {
@@ -382,7 +464,17 @@ async function deletePost(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Check permission - only author or admin can delete
-    if (existingPost.authorId !== session.user.id && session.user.role !== 'admin') {
+    // Get user from database to verify role (don't trust client session)
+    const user = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { id: true, role: true }
+    })
+
+    if (!user) {
+      return errorResponse(res, 'Unauthorized', 401)
+    }
+
+    if (existingPost.authorId !== user.id && user.role !== 'admin') {
       return errorResponse(res, 'Forbidden', 403)
     }
 
@@ -398,13 +490,31 @@ async function deletePost(req: NextApiRequest, res: NextApiResponse) {
 
     return successResponse(res, response)
   } catch (error) {
-    console.error('Error deleting post:', error)
+    // Log error securely without exposing sensitive data
+    console.error('Error deleting post:', {
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : 'Unknown error',
+      stack: process.env.NODE_ENV === 'development' ? (error as Error).stack : undefined
+    })
     return errorResponse(res, 'Failed to delete post', 500)
   }
 }
 
 // GET /api/blog/posts/[slug] - Get single post by slug
 async function getPostBySlug(req: NextApiRequest, res: NextApiResponse) {
+  // Apply security middleware
+  const securityPassed = await withSecurity(req, res, {
+    rateLimit: { maxRequests: 200 }, // Higher rate limit for individual post views
+    csrf: false, // GET requests don't need CSRF protection
+    sanitizeInput: true,
+    validateIP: true,
+    setHeaders: true
+  })
+  
+  if (!securityPassed) {
+    return // Security middleware already sent the response
+  }
+
   try {
     const { slug } = req.query
 
@@ -415,7 +525,6 @@ async function getPostBySlug(req: NextApiRequest, res: NextApiResponse) {
           select: {
             id: true,
             name: true,
-            email: true,
             image: true,
             displayName: true,
             bio: true,
@@ -485,8 +594,20 @@ async function getPostBySlug(req: NextApiRequest, res: NextApiResponse) {
 
     // Only show published posts to non-authors
     const session = await getSession({ req })
-    if (!post.published && (!session?.user || (session.user.id !== post.authorId && session.user.role !== 'admin'))) {
-      return errorResponse(res, 'Post not found', 404)
+    if (!post.published) {
+      if (!session?.user) {
+        return errorResponse(res, 'Post not found', 404)
+      }
+      
+      // Get user from database to verify role (don't trust client session)
+      const user = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        select: { id: true, role: true }
+      })
+
+      if (!user || (user.id !== post.authorId && user.role !== 'admin')) {
+        return errorResponse(res, 'Post not found', 404)
+      }
     }
 
     // Increment view count
@@ -502,7 +623,12 @@ async function getPostBySlug(req: NextApiRequest, res: NextApiResponse) {
 
     return successResponse(res, response.data)
   } catch (error) {
-    console.error('Error fetching post:', error)
+    // Log error securely without exposing sensitive data
+    console.error('Error fetching post:', {
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : 'Unknown error',
+      stack: process.env.NODE_ENV === 'development' ? (error as Error).stack : undefined
+    })
     return errorResponse(res, 'Failed to fetch post', 500)
   }
 }

@@ -125,12 +125,25 @@ export function isValidUrl(url: string): boolean {
   }
 }
 
-// Search helper
+// Search helper - safe version that doesn't inject HTML
 export function highlightSearchTerms(text: string, searchTerm: string): string {
   if (!searchTerm) return text
   
-  const regex = new RegExp(`(${searchTerm})`, 'gi')
-  return text.replace(regex, '<mark>$1</mark>')
+  // Escape special regex characters and HTML to prevent XSS
+  const escapedTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const escapedText = text.replace(/[&<>"']/g, (char) => {
+    const escapeMap: { [key: string]: string } = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#x27;'
+    }
+    return escapeMap[char]
+  })
+  
+  const regex = new RegExp(`(${escapedTerm})`, 'gi')
+  return escapedText.replace(regex, '<mark>$1</mark>')
 }
 
 // Category color generator
@@ -155,10 +168,24 @@ export function generateTagColor(): string {
   return colors[Math.floor(Math.random() * colors.length)]
 }
 
-// Content processing
+// Content processing - safe version with HTML escaping
 export function processContent(content: string): string {
-  // Process markdown-like syntax
-  let processed = content
+  // First escape HTML to prevent XSS
+  const escapeHtml = (text: string): string => {
+    return text.replace(/[&<>"']/g, (char) => {
+      const escapeMap: { [key: string]: string } = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#x27;'
+      }
+      return escapeMap[char]
+    })
+  }
+
+  // Process markdown-like syntax on escaped content
+  let processed = escapeHtml(content)
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
     .replace(/\*(.*?)\*/g, '<em>$1</em>') // Italic
     .replace(/`(.*?)`/g, '<code>$1</code>') // Inline code
